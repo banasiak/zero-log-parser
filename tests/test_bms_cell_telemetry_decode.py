@@ -109,12 +109,15 @@ def test_current_is_a_32bit_field_not_16bit():
     assert sd['pack_voltage_volts'] == 96.468
 
 
-def test_no_field_is_named_temperature():
-    # The temperature label was dropped 2026-09-24 (no independent
-    # confirmation found in the file set); the byte stays undecoded.
+def test_byte_30_is_still_not_read_as_a_temperature():
+    # The temperature label on block byte +30 was dropped 2026-09-24 (no
+    # independent confirmation found in the file set); the byte stays
+    # undecoded. The pack temperatures at +31/+32 are a different field.
     for message_type in TIERS:
-        out = Gen2.bms_cell_telemetry(message_type, _payload(message_type))
-        assert not any('temp' in key.lower() for key in out['structured_data'])
+        payload = _payload(message_type)
+        payload[FIELD_BASE + TIERS[message_type][0] + 30] = 99
+        sd = Gen2.bms_cell_telemetry(message_type, payload)['structured_data']
+        assert 99 not in [v for key, v in sd.items() if 'temp' in key.lower()]
 
 
 def test_raw_hex_preserves_the_whole_payload():

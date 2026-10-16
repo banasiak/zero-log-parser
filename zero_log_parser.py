@@ -1975,6 +1975,14 @@ class Gen2:
     #   +7   i32 LE  battery current, mA (negative = charging)
     #  +25   u24 LE  pack voltage, mV
     #
+    # The longer variant of 0x4C and 0x4D (63 / 71 bytes) also carries, at
+    # the same base (see LOG_STRUCTURE.md for the evidence):
+    #  +31   u8      pack temperature, lowest, C
+    #  +32   u8      pack temperature, highest, C
+    #  +34   u16 LE  discharge current limit, A
+    #  +36   u16 LE  charge current limit, A
+    #  +43   u16 LE  cell voltage spread (high - low), mV
+    #
     # A byte at +30 was previously read as BMS temperature; dropped
     # 2026-09-24 (analysis/bms_fst_offset_shift_test.md correction section)
     # - the external source that suggested it retracted the reading and no
@@ -1994,7 +2002,10 @@ class Gen2:
 
         Decodes low/unloaded-low/high cell voltage, state of charge,
         battery current and pack voltage, plus the shared 6-byte prefix.
-        Every other byte, including the one previously read as a BMS
+        The longer 0x4C and 0x4D variants (63 / 71 bytes) add the pack
+        temperature range, the charge and discharge current limits and the
+        cell voltage spread; the shorter ones have not been checked for
+        them. Every other byte, including the one previously read as a BMS
         temperature (see analysis/bms_fst_offset_shift_test.md's
         2026-09-24 correction), is unidentified and is kept as-is in
         raw_hex rather than guessed at. A payload whose length is not one
@@ -2027,6 +2038,14 @@ class Gen2:
             'battery_current_amps': current_ma / 1000.0,
             'pack_voltage_volts': pack_voltage_mv / 1000.0,
         })
+        if message_type != 0x4b and len(x) == valid_lengths[-1]:
+            structured_data.update({
+                'pack_temperature_low_celsius': BinaryTools.unpack('uint8', x, base + 31),
+                'pack_temperature_high_celsius': BinaryTools.unpack('uint8', x, base + 32),
+                'discharge_current_limit_amps': BinaryTools.unpack('uint16', x, base + 34),
+                'charge_current_limit_amps': BinaryTools.unpack('uint16', x, base + 36),
+                'cell_voltage_spread_volts': BinaryTools.unpack('uint16', x, base + 43) / 1000.0,
+            })
 
         structured_data['raw_hex'] = bytes(x).hex()
 

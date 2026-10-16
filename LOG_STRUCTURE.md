@@ -719,6 +719,48 @@ Firmware: 40-08198
 System ID: 39e9c5ea1
 ```
 
+### `0x4b`, `0x4c`, `0x4d` (BMS, FST) - Cell Telemetry
+*FST BMS logs only. The MBB uses the same three type codes for a different record, its state snapshot.*
+
+Payloads are 43 or 45, 61 or 63, and 69 or 71 bytes as the parser counts them (from header byte
+`0x07`). One block of fields starts at a base that moves 4 bytes per type: payload offset 8 / 12 / 16
+in this document (14 / 18 / 22 in the parser). Offsets below are from that base.
+
+Offset | Type | Contents | Parser key
+------ | ---- | -------- | ----------
+`+0`  | u16 | Lowest cell voltage, mV | `voltage_low_cell_volts`
+`+2`  | u16 | Lowest unloaded (open-circuit) cell voltage, mV; 0 unless the pack is at rest | `voltage_unloaded_cell_volts`
+`+4`  | u16 | Highest cell voltage, mV | `voltage_high_cell_volts`
+`+6`  | u8  | State of charge, % | `state_of_charge_percent`
+`+7`  | i32 | Battery current, mA; negative while charging | `battery_current_amps`
+`+25` | u24 | Pack voltage, mV | `pack_voltage_volts`
+`+28` | u8, u8 | Unidentified; `00 01` in 300 of 303 records | -
+`+30` | u8  | Unidentified; several values, most often 0, 2, 27 and 3. Once read as a temperature, since dropped | -
+`+31` | u8  | Pack temperature, lowest, °C | `pack_temperature_low_celsius`
+`+32` | u8  | Pack temperature, highest, °C | `pack_temperature_high_celsius`
+`+33` | u8  | Unidentified; 78 to 100 | -
+`+34` | u16 | Discharge current limit, A | `discharge_current_limit_amps`
+`+36` | u16 | Charge current limit, A | `charge_current_limit_amps`
+`+38` | u32 | Unidentified; 134,099 to 134,534. Possibly the full-charge capacity in mAh, unconfirmed | -
+`+42` | u8  | 0 in every record | -
+`+43` | u16 | Cell voltage spread (highest minus lowest), mV | `cell_voltage_spread_volts`
+`+45` | u32 | `0x4d` only; unidentified, about 134,300 | -
+
+The fields from `+31` on are present only in `0x4c` and `0x4d`, and the parser decodes them only on the
+longer variant of each (63 / 71 bytes), the only one these offsets were checked on.
+
+**Evidence for `+31` to `+43`.** From one vehicle, a 2023 DSR/X, in a BMS log pulled on 2026-10-15:
+51 records of the longer `0x4c`/`0x4d` variants that no page marker overlaps.
+
+- The spread equals the highest minus the lowest cell voltage in all 51.
+- The lowest pack temperature never exceeds the highest. Against the MBB's own pack temperatures in
+  `0x51`-`0x53`, once the BMS clock is aligned (it ran 1 h 41 m 30 s behind the MBB on this bike), the
+  highest matched in 10 of 10 pairs and the lowest in 9 of 10, never off by more than 1 °C.
+- The MBB writes its limits as debug text, "`lim_dischg: NNN000, lim_chg: -NNN000`" (mA, charge
+  negative). Compared with the nearest record, 3 to 19 minutes away, the discharge limit matched in 12
+  of 13 messages and the charge limit in 10 of 13. Most values are the same (916 A and 128 A), but the
+  less common ones line up too: 920; 924 with 138; 902; 162.
+
 ### `0xfd` - debug string
 Offset | Length     | Contents
 ------ | :--------: | --------

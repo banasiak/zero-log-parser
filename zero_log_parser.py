@@ -2674,49 +2674,30 @@ class Gen2:
 
     @classmethod
     def sensor_data(cls, x):
-        """Parse Type 84 (0x54) - Sensor Data (22 bytes)
+        """Type 84 (0x54), FST/Gen3 - 22 bytes: the shared 6-byte prefix
+        (fst_entry_prefix) and 16 unidentified bytes, kept in raw_hex.
 
-        Optimized Gen2 parser - generates structured data directly from binary.
-        Returns structured sensor telemetry with both human-readable conditions and structured JSON data.
+        This used to read odometer_meters from bytes 0-3, which are the
+        prefix's sub-second field (always a multiple of 1000 and at most
+        1,000,000), plus four "sensor" u32s and a status u16 at offsets that
+        straddle the prefix. None of them were real, so they are removed
+        rather than repointed; the odometer is in 0x52/0x53. The 16 bytes
+        look like four 32-bit fields, but none has been identified.
         """
-        if len(x) < 22:
+        if len(x) != 22:
             return cls.unhandled_entry_format(0x54, x)
 
-        # Extract binary data using BinaryTools.unpack()
-        odometer_m = BinaryTools.unpack('uint32', x, 0)      # Distance in meters
-        sensor1 = BinaryTools.unpack('uint32', x, 4)         # Sensor value 1
-        sensor2 = BinaryTools.unpack('uint32', x, 8)         # Sensor value 2
-        sensor3 = BinaryTools.unpack('uint32', x, 12)        # Sensor value 3
-        sensor4 = BinaryTools.unpack('uint32', x, 16)        # Sensor value 4
-        status = BinaryTools.unpack('uint16', x, 20)         # Status flags
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x54, x)
 
-        # Convert derived values
-        odometer_km = odometer_m // 1000  # Convert meters to kilometers
-
-        # Create structured data
-        structured_data = {
-            'odometer_meters': odometer_m,
-            'odometer_km': odometer_km,
-            'sensor_1_value': sensor1,
-            'sensor_2_value': sensor2,
-            'sensor_3_value': sensor3,
-            'sensor_4_value': sensor4,
-            'status_flags': status,
-            'status_hex': f'0x{status:04x}'
-        }
-
-        # Generate human-readable conditions with units
-        conditions = (
-            f"Odometer: {odometer_km}km, "
-            f"Sensor1: {sensor1}, Sensor2: {sensor2}, "
-            f"Sensor3: {sensor3}, Sensor4: {sensor4}, "
-            f"Status: 0x{status:04x}"
-        )
+        structured_data = dict(prefix)
+        structured_data['raw_hex'] = bytes(x).hex()
 
         return {
             'event': 'Sensor Data',
-            'structured_data': structured_data,  # NEW: Direct structured data
-            'conditions': conditions  # Human-readable conditions with units
+            'conditions': 'Payload unidentified',
+            'structured_data': structured_data
         }
 
     @classmethod

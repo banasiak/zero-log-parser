@@ -635,49 +635,22 @@ Offset | Length | Contents
 ```
 
 ### `0x54` (Type 84) - Sensor Data
-*Added in 2025+ firmware - supplementary sensor telemetry*
-
-**Purpose**: Additional sensor readings and system status (152 entries per log session)
+*FST platform - unidentified*
 
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 22     | Sensor telemetry data (22 bytes total)
+0x00   | 16     | Unidentified; looks like four 32-bit little-endian values
 
-**Decoded structure (little-endian):**
-- Bytes 0-3: Odometer reading (meters)
-- Bytes 4-7: Sensor reading 1 (power/voltage related)
-- Bytes 8-11: Sensor reading 2 (system status)
-- Bytes 12-15: Sensor reading 3 (temperature/performance)
-- Bytes 16-19: Sensor reading 4 (motor/controller data)
-- Bytes 20-21: Status flags (uint16)
+This section used to describe the first four bytes, as the parser counted them, as an odometer in
+metres. Those are the header's microseconds field (`0x07`), which is why the values were always
+multiples of 1,000; the odometer is in `0x52`/`0x53`. The four "sensor" values and the status word
+were read at offsets shifted by the 6 header bytes, straddling the real fields, so the analysis of
+them that was here has been removed.
 
-**Example JSON output:**
-```json
-{
-  "odometer_m": 689000,
-  "sensor_1": 429,
-  "sensor_2": 4278583296,
-  "sensor_3": 4390911,
-  "sensor_4": 1739784192,
-  "status": 1
-}
-```
-
-**Sensor Field Analysis (from multi-vehicle data):**
-
-Field | Value Range | Vehicle State Correlation | Interpretation
-------|-------------|---------------------------|---------------
-`sensor_1` | 200-4.2B | WSU/IB: low (200-600)<br>UN/TOP: high (millions) | Primary sensor, state-dependent
-`sensor_2` | 0-4.3B | WSU: always 0<br>HRG: very high<br>Mixed otherwise | Secondary sensor, 32-bit flags
-`sensor_3` | 0-57M | WSU: always 0<br>Others: variable | Tertiary sensor, temp/voltage?
-`sensor_4` | 0-4.29B | Frequently 4294901760 (0xFFF00000)<br>State-dependent variations | Status/flag register
-`status` | 0-65535 | 16-bit status register<br>Varies by vehicle and state | System status flags
-
-**Sensor Patterns by State:**
-- **WSU (Wakeup)**: sensor_2,3→0, sensor_4→max (clean startup)
-- **IB (In-motion)**: sensor_1→low, sensor_4→max (active operation) 
-- **HRG (Charging)**: sensor_1→low, sensor_2→high (charging mode)
-- **UN (Idle)**: High sensor values (monitoring/background)
+Observed in one MBB log of 159 entries: 24 are all zero. In the rest, the first value is 0 in 101
+and otherwise large, from -24,750,000 to 88,220,000; the second ranges from -543 to 401 (0 in 84,
+-450 in 18); the third from 0 to 169; and the fourth is -1 in 88 and otherwise between 100,101 and
+104,575.
 
 ### `0x52` (Type 82) - Unknown Type 82
 *Added in 2025+ firmware - frequently occurring entry*

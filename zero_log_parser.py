@@ -2969,6 +2969,89 @@ class Gen2:
             return 0
 
     @classmethod
+    def _marker_block_indices(cls, buf, start, length):
+        """Indices into an entry's unescaped block (type byte first) whose
+        on-disk bytes a page marker overwrote. The marker sits at every
+        128-byte page boundary after the first. Escapes are paired the way
+        unescape_block pairs them, on the bytes as they are on disk, so an
+        index here lines up with the block the decoder is handed."""
+        end = start + length
+        lost_raw = set()
+        first_page = max(cls.PAGE_SIZE, start - start % cls.PAGE_SIZE)
+        for page in range(first_page, end, cls.PAGE_SIZE):
+            if bytes(buf[page:page + 4]) == cls.PAGE_MARKER:
+                lost_raw.update(range(max(page, start + 2), min(page + 4, end)))
+        indices = set()
+        index, pos = 0, start + 2
+        while pos < end and lost_raw:
+            width = 2 if buf[pos] == 0xfe and pos + 1 < end else 1
+            if lost_raw.intersection(range(pos, pos + width)):
+                indices.add(index)
+            index += 1
+            pos += width
+        return indices
+
+    @classmethod
+    def _parse_around_marker(cls, entry_parser, message_type, message, lost, lost_count):
+        """Decode an entry whose payload bytes at the indices in lost were
+        overwritten by a page marker (lost_count also counts any lost
+        timestamp bytes). The payload is decoded twice, with
+        the lost bytes filled two different ways. A structured_data field
+        whose value differs between the two depends on lost bytes and is
+        set to None, so no value is ever read from them. The first fill is
+        '~', which is how lost characters show in text entries.
+
+        Payload bytes 0-3 are the FST sub-second field, which every FST
+        decoder gates on, so both fills keep it in range; it is reported as
+        None whenever any of its bytes was lost."""
+        def decode(fill):
+            filled = bytearray(message)
+            for i in lost:
+                filled[i] = fill(i)
+            try:
+                if entry_parser:
+                    return entry_parser(filled)
+                return cls.unhandled_entry_format(message_type, filled)
+            except Exception:
+                return None
+
+        tilde = decode(lambda i: 0x00 if i < 4 else 0x7e)
+        other = decode(lambda i: 0x01 if i < 3 else 0x00 if i == 3 else 0x81)
+        actual = decode(lambda i: message[i])
+
+        def merge(a, b, real):
+            if isinstance(a, dict) and isinstance(b, dict) and a.keys() == b.keys():
+                real = real if isinstance(real, dict) else {}
+                return {k: real.get(k, a[k]) if k == 'raw_hex' else merge(a[k], b[k], real.get(k))
+                        for k in a}
+            if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+                real = real if isinstance(real, list) and len(real) == len(a) else [None] * len(a)
+                return [merge(x, y, r) for x, y, r in zip(a, b, real)]
+            return a if a == b else None
+
+        structured = [e.get('structured_data') if e else None for e in (tilde, other)]
+        if tilde is None or other is None or (structured[0] is None) != (structured[1] is None) \
+                or (structured[0] is not None and structured[0].keys() != structured[1].keys()):
+            # The decoder's own layout checks depend on lost bytes, so the
+            # entry cannot be decoded at all.
+            entry = cls.unhandled_entry_format(message_type, message)
+            entry['conditions'] = (entry.get('conditions', '') + ' '
+                                   + cls.corrupted_span_display(lost_count)).strip()
+            return entry
+
+        entry = dict(tilde)
+        if structured[0] is None:
+            entry['conditions'] = ((entry.get('conditions') or '') + ' '
+                                   + cls.corrupted_span_display(lost_count)).strip()
+            return entry
+        merged = merge(structured[0], structured[1], actual.get('structured_data') if actual else None)
+        if 'subsecond_us' in merged and any(i < 4 for i in lost):
+            merged['subsecond_us'] = None
+        cls.mark_bytes_corrupted(merged, lost_count)
+        entry['structured_data'] = merged
+        return entry
+
+    @classmethod
     def collect_paged_bms_entries(cls, buf, logger, timezone_offset=None, verbosity_level=1):
         """Marker-aware entry walk for the FST/Gen3 BMS page format
         (is_paged_bms_format()). Builds the same (sort_timestamp,
@@ -2980,8 +3063,9 @@ class Gen2:
         in that budget; see analysis/fst_page_aware_walker.md for why a
         larger budget alone doesn't fix this without also detecting them).
 
-        Two corrections over the normal walk, both confirmed at full
-        population scale (291 files) before implementing:
+        Three corrections over the normal walk; the first two were
+        confirmed at full population scale (291 files) before implementing,
+        the third on one vehicle's logs:
 
         - Type destroyed: a real entry is found (0xb2 and length intact),
           but the marker overwrote its type byte and part of its
@@ -2999,11 +3083,18 @@ class Gen2:
           fill - follows the marker; confirmed on 11,136 such gaps, 97.6%
           of every gap this shape could apply to.
 
-        Anything else - a marker elsewhere inside an otherwise normal
-        entry, a gap that doesn't fit either shape, a marker on a page
-        that was never written (all-0xff) - is left exactly as the normal
-        walk already handles it. No byte is reconstructed or guessed at
-        anywhere in this function.
+        - Payload or timestamp hit: the marker lands anywhere else inside
+          a real entry (_marker_block_indices). The entry is decoded by
+          _parse_around_marker: every structured_data field that depends
+          on a lost byte is None, the entry is flagged with
+          mark_bytes_corrupted(), lost characters in a debug string show
+          as '~', and a lost timestamp is left 'Unknown' for
+          interpolate_missing_timestamps() to fill in from its neighbours.
+
+        A gap that doesn't fit either header shape, or a marker on a page
+        that was never written (all-0xff), is left exactly as the normal
+        walk already handles it. No lost byte's value is ever reported:
+        lost bytes are filled only to find which fields depend on them.
         """
         n = len(buf)
         parsers = cls._entry_parsers()
@@ -3078,17 +3169,27 @@ class Gen2:
             message_type = cls.type_from_block(unescaped_block)
             message = unescaped_block[0x05:]
             entry_parser = parsers.get(message_type)
-            try:
-                if entry_parser:
-                    entry = entry_parser(message)
-                else:
+            lost = cls._marker_block_indices(buf, start, length)
+            if lost:
+                entry = cls._parse_around_marker(entry_parser, message_type, message,
+                                                 {i - 5 for i in lost if i >= 5}, len(lost))
+            else:
+                try:
+                    if entry_parser:
+                        entry = entry_parser(message)
+                    else:
+                        entry = cls.unhandled_entry_format(message_type, message)
+                except Exception:
                     entry = cls.unhandled_entry_format(message_type, message)
-            except Exception:
-                entry = cls.unhandled_entry_format(message_type, message)
-                entry['event'] = 'Exception caught: ' + entry['event']
+                    entry['event'] = 'Exception caught: ' + entry['event']
 
-            entry['time'] = cls.timestamp_from_event(unescaped_block, timezone_offset=timezone_offset)
-            entry['original_timestamp'] = BinaryTools.unpack('uint32', unescaped_block, 0x01)
+            if lost.intersection(range(1, 5)):
+                # The marker overwrote part of the timestamp; neighbours fill it in.
+                entry['time'] = 'Unknown'
+                entry['original_timestamp'] = None
+            else:
+                entry['time'] = cls.timestamp_from_event(unescaped_block, timezone_offset=timezone_offset)
+                entry['original_timestamp'] = BinaryTools.unpack('uint32', unescaped_block, 0x01)
             if 'structured_data' not in entry:
                 improved_event, improved_conditions, *_rest = improve_message_parsing(
                     entry.get('event', ''), entry.get('conditions', ''),
@@ -4292,6 +4393,8 @@ class LogData(object):
                     return '[' + '; '.join(format_structured_data(v) for v in value) + ']'
                 if isinstance(value, str):
                     return value
+                if value is None:
+                    return 'None'  # no unit: a field lost to a page marker, or never set
                 # Every check below is an unchanged substring match from the
                 # original version of this function, preserved as-is,
                 # including its pre-existing false-positive matches (e.g.

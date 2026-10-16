@@ -55,3 +55,20 @@ def test_command_line_accepts_a_negative_offset():
                                 capture_output=True, text=True, cwd=ROOT)
         assert result.returncode == 0, result.stderr[-2000:]
         assert 'UTC-6' in open(out, encoding='utf-8-sig').read()
+
+
+def test_command_line_works_without_the_package_on_the_path():
+    # python -I leaves the script's own directory off sys.path, so neither
+    # src.zero_log_parser.utils nor zero_log_parser.utils can be imported;
+    # get_timezone_offset used to be left undefined and fail with NameError.
+    from test_undecoded_and_corrupted_rendering import _write_minimal_rev0_file
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, 'test.bin')
+        _write_minimal_rev0_file(path, b'')
+        for tz in ('-6', 'UTC', None):
+            out = os.path.join(d, 'test.txt')
+            args = [sys.executable, '-I', os.path.join(ROOT, 'zero_log_parser.py'), '-o', out, path]
+            if tz is not None:
+                args[3:3] = ['--timezone', tz]
+            result = subprocess.run(args, capture_output=True, text=True, cwd=d)
+            assert result.returncode == 0, (tz, result.stderr[-2000:])

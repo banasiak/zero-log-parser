@@ -72,7 +72,16 @@ except ImportError:
     try:
         from zero_log_parser.utils import get_timezone_offset
     except ImportError:
-        pass
+        # Run as a single file, or with python -I, so the package is not
+        # importable: same behaviour as utils.get_timezone_offset.
+        def get_timezone_offset(tz_code):
+            if tz_code is None:
+                return int(datetime.now().astimezone().utcoffset().total_seconds())
+            try:
+                return int(float(tz_code) * 60 * 60)
+            except (TypeError, ValueError):
+                from zoneinfo import ZoneInfo
+                return int(datetime.now(ZoneInfo(tz_code)).utcoffset().total_seconds())
 
 
 @dataclass

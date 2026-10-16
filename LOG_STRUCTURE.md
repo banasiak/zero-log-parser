@@ -603,37 +603,94 @@ Offset | Length | Contents
 0x36   | 2      | cell 27 mV
 0x38   | 2      | cell 28 mV
 
-### `0x51` (Type 81) - Vehicle State Telemetry
-*Added in 2025+ firmware - replaces periodic "Riding" entries*
+### `0x51`, `0x52`, `0x53` (Types 81-83) - State Telemetry
+*FST platform - replaces the periodic "Riding" entries*
 
-**Purpose**: Primary vehicle telemetry data collection (151 entries per log session)
+**Purpose**: Periodic vehicle telemetry tagged with the vehicle state, written as a small, medium and
+large tier. In one MBB log the parser saw 158 entries of `0x51`, 20 of `0x52` and 19 of `0x53`.
 
-Offset | Length | Contents
------- | :----: | --------
-0x00   | 68     | Vehicle state telemetry data (68 bytes total)
+The layout is shared, and fields are easiest to locate from the 4-byte NUL-padded state tag `T`, at
+payload offset 29 / 33 / 37 for `0x51` / `0x52` / `0x53` (35 / 39 / 43 in the parser, whose decoder
+input starts at header byte `0x07`). The parser decodes the fields below only on the payload length
+they were checked on: 68, 85 and 99 bytes as the parser counts them. The shorter variant of each tier
+(64, 81, and 93 or 95 bytes) keeps them in `raw_hex`, since its layout has not been checked.
 
-**Decoded structure (little-endian):**
-- Bytes 36-39: Vehicle state string ("TOP", "RUN", "STOP", "UN", "STRT", "PWSU", etc.)
-- Bytes 0-3: Odometer reading (meters)
-- Bytes 4-7: SOC raw value (State of Charge)
-- Bytes 8-11: Ambient temperature raw value
-- Bytes 12-15: Temperature sensor 1 (°C)
-- Bytes 16-19: Temperature sensor 2 (°C)  
-- Bytes 20-23: Temperature sensor 3 (°C)
-- Bytes 24-27: Temperature sensor 4 (°C)
-- Remaining bytes: Additional telemetry values (motor data, power readings)
+Offset | Type | Contents | Parser key | Confidence
+------ | ---- | -------- | ---------- | ----------
+`T-21` | u32 | Pack voltage, mV, as the MBB reports it | `mbb_pack_voltage_volts` | high
+`T-17` | i32 | Pack current, mA, as the MBB reports it | `mbb_pack_current_amps` | high
+`T-13` | i32 | Motor rpm | `motor_rpm` | high
+`T-9`  | u8  | State of charge, %, as the dash shows it (up to 110 with extended charging) | `state_of_charge_percent` | high
+`T-8`  | u32 | Pack voltage, mV, as the BMS reports it | `bms_pack_voltage_volts` | high
+`T-4`  | i32 | Pack current, mA, as the BMS reports it; negative while charging | `bms_pack_current_amps` | high
+`T`    | char[4] | State tag (see the state machine above) | `vehicle_state` / `state` | -
+`T+5`  | u32 | Unidentified; by state: RUN and FWUP 0, CHRG 12, STOP 0 or 12, WAIT 0 or 60, HIB 48 or 60, PWSU 60 | - | -
+`T+9`  | i32 | Ambient temperature, hundredths of °C | `ambient_temperature_celsius` | high
+`T+13` | 4 bytes | Drivetrain temperature 1, °C | `temperature_1_celsius` | medium
+`T+17` | 4 bytes | Drivetrain temperature 2, °C | `temperature_2_celsius` | medium
+`T+21` | 4 bytes | Pack temperature, highest, °C | `pack_temperature_high_celsius` | high
+`T+25` | 4 bytes | Pack temperature, lowest, °C | `pack_temperature_low_celsius` | high
+`T+29` | u32 | 12 V battery voltage, µV | `battery_12v_volts` | high
+`T+33` | u8, u8 | Unidentified; 1 and 1 in every `0x52`/`0x53` record seen | - | -
+`T+35` | u32 | Odometer, tenths of a km (`0x52` and `0x53` only) | `odometer_km` | high
 
-**Example JSON output:**
+**Evidence.** All from one vehicle, a 2023 DSR/X, in two MBB logs: three days in October 2026 on
+firmware 46 (197 records) and two days in October 2025 on firmware 42 (308 records, plus a few
+entries from November 2024). Each field was cross-checked against signals recorded independently in
+the same files; only the 2026 log has a BMS log beside it.
+
+- The two voltage/current pairs agree with each other while riding: voltage within 0.52 V (median
+  0.15 V) in 2026 and within 0.37 V in 2025, and at peak 354.1 A (MBB) against 352.5 A (BMS). The
+  BMS pair matches the 2026 BMS log's own cell telemetry once the BMS clock is aligned (it ran
+  1 h 41 m 30 s behind the MBB on this bike).
+- The MBB-side voltage and current are nonzero in exactly the records where the two drivetrain
+  temperatures are, in both logs (505 of 505): every RUN and FWUP record and a few around them,
+  never while charging. All four probably come from the motor controller. The logs do not say which
+  drivetrain temperature is the motor and which the controller.
+- Motor rpm is 0 in all but one of the 230 records outside RUN; the exception reads 10 rpm just
+  after a ride. Speed taken from the odometer predicts a mean of 2,038 rpm through the 90/20 belt and
+  a 170/60-17 rear tire against 2,221 logged in 2026 (33 two-minute windows), and 2,513 against
+  2,304 in 2025 (92 windows, correlation 0.81).
+- State of charge is the dash's figure. It moves in step with the BMS log's own state of charge on a
+  higher scale (BMS 58 reads 61, 69 reads 74, 84 reads 90, 91 reads 100). In a log pulled the next
+  day, after an override charge to 100% and then an extended charge to 110%, it rose to 100 and then
+  past it to 110, while the BMS's own reached 91 and then 100. A normal charge ends at 90, the bike's
+  usual charge target. It is 0 in the PWSU records and most WAIT ones.
+- Ambient temperature is within about 0.5 °C of the MBB's own "Ambient NNC" debug text in the same
+  second, and the 12 V reading matches its "Battery NNNNNNNNuV" text (median difference 0, at most
+  67 mV), over 153 pairs each across the two logs.
+- The pack temperatures equal the 2026 BMS log's pack maximum and minimum in 18 of 19 pairs.
+- The odometer matches the dash: after the 2026 log was pulled the dash read 13,587 miles, and the
+  log's last odometer value, 21,867.2 km, is 13,587.6 miles. It never decreases: 11,776.1 to
+  16,569.0 km within the 2025 log and 21,805.5 to 21,867.2 km within the 2026 one. Read as tenths of
+  a mile, it would predict 3,280 and 4,044 rpm against the 2,221 and 2,304 logged.
+
+The four temperatures sit in 4-byte slots. The parser reads the low byte, as the 0x51 decoder always
+has; the other three bytes were zero in all 505 records, none of which was below 0 °C, so whether
+the slot is a signed 32-bit value is open. On `0x51`, `temperature_3_celsius` and
+`temperature_4_celsius` remain as deprecated aliases of the two pack temperatures.
+
+Bytes before `T-21` (8 / 12 / 16 bytes) are undecoded. Payload byte 4 is an unidentified 7-value
+enum that correlates with the state, and the bytes after the odometer are undecoded.
+
+**Example JSON output** (`0x52`, while riding):
 ```json
 {
-  "vehicle_state": "RUN",
-  "odometer_m": 688000,
-  "soc_raw": 426,
-  "ambient_temp_raw": 1966,
-  "temp_1": 23,
-  "temp_2": 24,
-  "temp_3": 24,
-  "temp_4": 22
+  "telemetry_tier": "medium",
+  "state": "RUN",
+  "mbb_pack_voltage_volts": 108.5,
+  "mbb_pack_current_amps": 107.7,
+  "motor_rpm": 3366,
+  "state_of_charge_percent": 83,
+  "bms_pack_voltage_volts": 108.309,
+  "bms_pack_current_amps": 98.452,
+  "ambient_temperature_celsius": 29.55,
+  "temperature_1_celsius": 52,
+  "temperature_2_celsius": 47,
+  "pack_temperature_high_celsius": 25,
+  "pack_temperature_low_celsius": 24,
+  "battery_12v_volts": 13.127,
+  "odometer_km": 21824.5
 }
 ```
 
@@ -681,21 +738,6 @@ Field | Value Range | Vehicle State Correlation | Interpretation
 - **IB (In-motion)**: sensor_1→low, sensor_4→max (active operation) 
 - **HRG (Charging)**: sensor_1→low, sensor_2→high (charging mode)
 - **UN (Idle)**: High sensor values (monitoring/background)
-
-### `0x52` (Type 82) - Unknown Type 82
-*Added in 2025+ firmware - frequently occurring entry*
-
-**Purpose**: Unknown structured data (20 entries per log session)
-
-Offset | Length | Contents
------- | :----: | --------
-0x00   | variable | Complex structured data with vehicle state and sensor information
-
-**Observed patterns:**
-- Contains vehicle state strings ("RUN", "STOP")
-- Includes odometer and power readings
-- Mixed binary and text data
-- Requires further reverse engineering
 
 ### `0xfb` (Type 251) - System Information
 *Added in 2025+ firmware - appears once per log session*

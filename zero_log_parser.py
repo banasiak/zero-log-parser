@@ -2074,8 +2074,9 @@ class Gen2:
     # NUL-padded ASCII state tag, so the tag sits at payload offset 35 / 39 /
     # 43 for 0x51 / 0x52 / 0x53. Each tier also comes in a variant 4 bytes
     # longer (0x52: 81 and 85 bytes; 0x53: 95 and 99, plus a rare 93).
-    # Only the tag and framing are decoded; every other byte is preserved in
-    # raw_hex. Evidence: analysis/fst_part2_unknown_types.md.
+    # The longer variant also carries the fields in state_telemetry_fields();
+    # the full payload is kept in raw_hex either way. Evidence for the layout:
+    # analysis/fst_part2_unknown_types.md.
     # message_type -> (tier name, accepted payload lengths, state tag offset)
     TELEMETRY_TIERS = {
         0x52: ('medium', (81, 85), 39),
@@ -2083,16 +2084,52 @@ class Gen2:
     }
     TELEMETRY_TAGS = frozenset(
         ['RUN', 'PWSU', 'CHRG', 'WAIT', 'STOP', 'HIB', 'WAKE', 'FWUP', 'STRT', 'REV', 'PARK'])
+    # The payload length of each type that state_telemetry_fields() was
+    # checked on. The other variants are 4 or 6 bytes shorter and may not
+    # share the layout, so they keep these bytes in raw_hex only.
+    TELEMETRY_FIELD_LENGTHS = {0x51: 68, 0x52: 85, 0x53: 99}
+
+    @classmethod
+    def state_telemetry_fields(cls, message_type, x, tag_offset):
+        """Telemetry fields shared by types 0x51/0x52/0x53, read at offsets
+        relative to the state tag (35 / 39 / 43). Valid only on the payload
+        lengths in TELEMETRY_FIELD_LENGTHS; the evidence for each field is
+        in LOG_STRUCTURE.md.
+
+        The mbb_* voltage and current are nonzero exactly when
+        temperature_1/2 are, so all four probably come from the motor
+        controller. temperature_1/2 are drivetrain temperatures, but which
+        one is the motor is not confirmed. state_of_charge_percent runs on
+        a slightly higher scale than the BMS's own state of charge.
+        """
+        t = tag_offset
+        fields = {
+            'mbb_pack_voltage_volts': round(BinaryTools.unpack('uint32', x, t - 21) / 1000.0, 3),
+            'mbb_pack_current_amps': round(BinaryTools.unpack('int32', x, t - 17) / 1000.0, 3),
+            'motor_rpm': BinaryTools.unpack('int32', x, t - 13),
+            'state_of_charge_percent': BinaryTools.unpack('uint8', x, t - 9),
+            'bms_pack_voltage_volts': round(BinaryTools.unpack('uint32', x, t - 8) / 1000.0, 3),
+            'bms_pack_current_amps': round(BinaryTools.unpack('int32', x, t - 4) / 1000.0, 3),
+            'ambient_temperature_celsius': round(BinaryTools.unpack('int32', x, t + 9) / 100.0, 2),
+            'temperature_1_celsius': BinaryTools.unpack('uint8', x, t + 13),
+            'temperature_2_celsius': BinaryTools.unpack('uint8', x, t + 17),
+            'pack_temperature_high_celsius': BinaryTools.unpack('uint8', x, t + 21),
+            'pack_temperature_low_celsius': BinaryTools.unpack('uint8', x, t + 25),
+            'battery_12v_volts': round(BinaryTools.unpack('uint32', x, t + 29) / 1000000.0, 3),
+        }
+        if message_type != 0x51:
+            fields['odometer_km'] = round(BinaryTools.unpack('uint32', x, t + 35) / 10.0, 1)
+        return fields
 
     @classmethod
     def vehicle_state_telemetry_tier(cls, message_type, x):
         """Types 0x52 / 0x53 - state-tagged telemetry, medium / large tier.
 
-        Decodes the tier, the state tag and the shared 6-byte prefix. The
-        fields between them and after the tag are unidentified (the layout
-        was mapped by shape only) and are kept in raw_hex. A payload whose
-        length is not one of the accepted variants, or whose tag is not one
-        of the known state names, falls back to the raw-hex report
+        Decodes the tier, the state tag and the shared 6-byte prefix, plus
+        the fields in state_telemetry_fields() on the longer variant of each
+        tier (85 / 99 bytes). The full payload is kept in raw_hex. A payload
+        whose length is not one of the accepted variants, or whose tag is
+        not one of the known state names, falls back to the raw-hex report
         unhandled_entry_format() already gives these types.
         """
         tier, lengths, tag_offset = cls.TELEMETRY_TIERS[message_type]
@@ -2113,6 +2150,8 @@ class Gen2:
             'state': state,
         }
         structured_data.update(prefix)
+        if len(x) == cls.TELEMETRY_FIELD_LENGTHS[message_type]:
+            structured_data.update(cls.state_telemetry_fields(message_type, x, tag_offset))
         structured_data['raw_hex'] = bytes(x).hex()
 
         return {
@@ -2604,29 +2643,18 @@ class Gen2:
     def vehicle_state_telemetry(cls, x):
         """Parse Type 81 (0x51) - Vehicle State Telemetry (64 or 68 bytes).
 
-        This function used to read odometer_meters/odometer_km from bytes
-        0-3 and soc_raw/soc_percent from bytes 4-7. Both are wrong: bytes
-        0-3 are the entry's own sub-second timestamp fraction and bytes 4-5
-        are the same sequence/UTC-offset prefix every FST entry type shares
-        (Gen2.fst_entry_prefix); bytes 6-7 are always zero. No odometer or
-        state-of-charge value was found anywhere else in this payload
-        either (see analysis/vst_field_fix.md, which also checked bytes
-        10-11, previously read as part of a bogus "ambient_temperature_raw"
-        u32 at offset 8: byte 8-9 are always zero, byte 11 is always zero,
-        and byte 10 is a 7-value enum that correlates with vehicle_state
-        and varies within a single VIN's own files, ruling it out as a
-        per-vehicle hardware ID as well as a temperature reading).
-        Confirmed: this entry type does not carry odometer or SOC data.
-        Removed rather than repointed; kept in raw_hex like every other
-        unidentified byte in this payload.
+        Decodes the state tag, the shared 6-byte prefix and four
+        temperatures at a 4-byte stride (bytes 48/52/56/60) on both lengths.
+        The 68-byte variant also carries the fields in
+        state_telemetry_fields(), where temperature_3/4_celsius stay as
+        deprecated aliases of pack_temperature_high/low_celsius. Those
+        offsets have not been checked on the 64-byte variant, which keeps
+        everything else in raw_hex.
 
-        Kept, corrected: temperature_1..4_celsius are real (see
-        vst_field_fix.md's per-VIN smoothness, physical-range and seasonal
-        checks), but the previous code read them at bytes 48-51 - the real
-        readings sit at a 4-byte stride, 48/52/56/60 (temp1 happened to
-        already be right); the previous temp2-4 read the zero-filled gap
-        bytes between them, matching the earlier finding that they were
-        zero in 99.97% of real entries.
+        Bytes 0-3 are the entry's own sub-second timestamp fraction, not an
+        odometer. 0x52/0x53 carry the odometer after the 12 V reading, past
+        the end of a 0x51 payload. Byte 10 is an unidentified 7-value enum
+        that correlates with vehicle_state (see analysis/vst_field_fix.md).
 
         Real payloads are 64 or 68 bytes (roughly even split); anything
         else, including the 4-68 byte stray lengths seen in ~0.03% of raw
@@ -2653,10 +2681,13 @@ class Gen2:
 
         structured_data = {'vehicle_state': state}
         structured_data.update(prefix)
-        structured_data['temperature_1_celsius'] = temp1
-        structured_data['temperature_2_celsius'] = temp2
-        structured_data['temperature_3_celsius'] = temp3
-        structured_data['temperature_4_celsius'] = temp4
+        if len(x) == cls.TELEMETRY_FIELD_LENGTHS[0x51]:
+            structured_data.update(cls.state_telemetry_fields(0x51, x, 35))
+        else:
+            structured_data['temperature_1_celsius'] = temp1
+            structured_data['temperature_2_celsius'] = temp2
+        structured_data['temperature_3_celsius'] = temp3  # Deprecated on 68 bytes, use pack_temperature_high_celsius
+        structured_data['temperature_4_celsius'] = temp4  # Deprecated on 68 bytes, use pack_temperature_low_celsius
         structured_data['raw_hex'] = bytes(x).hex()
 
         conditions = (

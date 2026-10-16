@@ -70,9 +70,12 @@ def test_prefix_fields_and_raw_hex():
     assert bytes.fromhex(sd['raw_hex']) == bytes(payload)
 
 
-def test_leading_field_is_not_labelled_odometer():
-    sd = Gen2.vehicle_state_telemetry_tier(0x53, _payload(0x53, 99))['structured_data']
-    assert not any('odo' in key for key in sd)
+def test_leading_field_is_the_subsecond_value_not_the_odometer():
+    payload = _payload(0x53, 99, subsecond=484000)
+    struct.pack_into('<I', payload, 43 + 35, 218672)
+    sd = Gen2.vehicle_state_telemetry_tier(0x53, payload)['structured_data']
+    assert sd['subsecond_us'] == 484000
+    assert sd['odometer_km'] == 21867.2
 
 
 def test_tag_is_read_at_the_tier_specific_offset():

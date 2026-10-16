@@ -754,6 +754,11 @@ Offset | Length     | Contents
   older formats, such as `0xfd`, keeps its payload layout, so a decoder handed bytes from `0x07` on
   has to skip the 6 header bytes (microseconds, counter, UTC offset) on FST files and not on the
   others
+- In BMS files (131,328 bytes), every 128-byte page after the first starts with `00 f0 ff 00`. The
+  marker overwrites the 4 bytes of whatever entry spans the page boundary, and the entry's length
+  byte still counts them. It can land on the `0xb2`, the length, the type, the timestamp or anywhere
+  in the payload, so treat those bytes as lost rather than reading values from them. Its leading
+  `0x00` also ends a debug string early if read as text
 
 **For 2024 Ring Buffer Format:**
 - Parse verbose diagnostic messages

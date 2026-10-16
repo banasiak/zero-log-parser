@@ -101,7 +101,10 @@ Offset | Length | Contents
 0x0d   | *variable* | Payload
 
 The UTC offset: `0xF9` (-7) and `0xF8` (-8) are, for example, US Pacific daylight and standard
-time, and `0x01`/`0x02` are UTC+1/UTC+2.
+time, and `0x01`/`0x02` are UTC+1/UTC+2. It follows daylight saving time: one MBB file from a
+US Mountain time bike holds entries from December at -7 and from October at -6. The parser
+exposes it as `utc_offset_hours` on the FST entry types it decodes into structured data
+(`0x48`, `0x4b`-`0x4d`, `0x4f`, `0x51`-`0x53`).
 
 From the type byte onwards, each `0xB2` or `0xFE` is written as `0xFE` followed by the byte's
 complement (`0xB2` becomes `fe 4d`, `0xFE` becomes `fe 01`), and the length byte counts the

@@ -4,10 +4,9 @@ Gen2.vehicle_state_telemetry(), after the field fix in
 analysis/vst_field_fix.md: odometer_meters/odometer_km/soc_raw/soc_percent/
 ambient_temperature_* removed (never confirmed anywhere in this payload -
 bytes 0-3 are the entry's own sub-second timestamp fraction, bytes 4-5 the
-shared sequence/marker prefix, bytes 8-11 either always zero or an
+shared sequence/UTC-offset prefix, bytes 8-11 either always zero or an
 unidentified state-correlated enum, not temperature); temperature_1..4_celsius
-corrected to the real stride-4 offsets (48/52/56/60, not 48/49/50/51); byte 5
-exposed raw as marker, unlabeled.
+corrected to the real stride-4 offsets (48/52/56/60, not 48/49/50/51).
 
 Same conventions as the other files in this directory: plain test_*
 functions, stdlib only, synthetic in-process payloads built from the
@@ -67,10 +66,10 @@ def test_odometer_and_soc_fields_are_gone():
         assert key not in sd, key
 
 
-def test_marker_is_not_labelled_utc_offset_or_anything_else():
-    sd = Gen2.vehicle_state_telemetry(_payload())['structured_data']
-    assert 'marker' in sd
-    assert not any('utc' in key.lower() or 'offset' in key.lower() for key in sd)
+def test_byte_5_is_the_signed_utc_offset_and_marker_keeps_the_raw_byte():
+    sd = Gen2.vehicle_state_telemetry(_payload(marker=0xfa))['structured_data']
+    assert sd['utc_offset_hours'] == -6
+    assert sd['marker'] == 0xfa
 
 
 def test_temperatures_read_from_the_stride_four_offsets_not_48_51():

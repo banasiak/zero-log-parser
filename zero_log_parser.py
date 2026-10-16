@@ -1767,13 +1767,22 @@ class Gen2:
         Byte 4 is a per-entry sequence counter (mod 256): in the FST/Gen3
         file set it increases by exactly 1 between 97.3% of adjacent entries
         in walk order (804,148 of 826,535 pairs), for entries of every type,
-        not only the ones decoded here. Byte 5 is a marker byte of
-        unidentified meaning (mostly 0xf9, 0x02, 0xfc, 0xfb, 0x01).
+        not only the ones decoded here.
+
+        Byte 5 is the UTC offset in whole hours, signed (header byte 0x0c in
+        LOG_STRUCTURE.md). The values most often seen in the file set, 0xf9,
+        0x02, 0xfc, 0xfb and 0x01, are -7, +2, -4, -5 and +1: US Pacific,
+        Eastern and Central daylight time, and Central European summer and
+        winter time. In one vehicle's logs the byte reads -7 on entries from
+        December (Mountain Standard Time) and -6 on entries from October
+        (Mountain Daylight Time) in the same file. The raw byte stays
+        available as 'marker', its name from before it was identified.
         """
         return {
             'subsecond_us': BinaryTools.unpack('uint32', x, 0x0),
             'sequence': BinaryTools.unpack('uint8', x, 0x4),
-            'marker': BinaryTools.unpack('uint8', x, 0x5),
+            'utc_offset_hours': BinaryTools.unpack('int8', x, 0x5),
+            'marker': BinaryTools.unpack('uint8', x, 0x5),  # Deprecated, use utc_offset_hours
         }
 
     # Entry type 0x48: charger table. A 6-byte prefix (see fst_entry_prefix)
@@ -2598,7 +2607,7 @@ class Gen2:
         This function used to read odometer_meters/odometer_km from bytes
         0-3 and soc_raw/soc_percent from bytes 4-7. Both are wrong: bytes
         0-3 are the entry's own sub-second timestamp fraction and bytes 4-5
-        are the same sequence/marker prefix every FST entry type shares
+        are the same sequence/UTC-offset prefix every FST entry type shares
         (Gen2.fst_entry_prefix); bytes 6-7 are always zero. No odometer or
         state-of-charge value was found anywhere else in this payload
         either (see analysis/vst_field_fix.md, which also checked bytes
@@ -2618,10 +2627,6 @@ class Gen2:
         already be right); the previous temp2-4 read the zero-filled gap
         bytes between them, matching the earlier finding that they were
         zero in 99.97% of real entries.
-
-        Byte 5 (marker) is exposed raw and unlabeled, same as every other
-        FST entry type - not confirmed to mean anything, including the
-        "UTC offset" idea floated for it, which remains open.
 
         Real payloads are 64 or 68 bytes (roughly even split); anything
         else, including the 4-68 byte stray lengths seen in ~0.03% of raw

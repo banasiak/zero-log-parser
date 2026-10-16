@@ -750,6 +750,10 @@ Offset | Length     | Contents
 - Un-stuff `0xFE` escapes before applying any offset. The header is always 13 bytes after
   un-stuffing; on raw bytes, every escape before a field shifts it by one
 - Read byte `0x0c` as the UTC offset in hours rather than matching it against fixed values
+- Payload offsets in this document start after the 13-byte header. An entry type shared with the
+  older formats, such as `0xfd`, keeps its payload layout, so a decoder handed bytes from `0x07` on
+  has to skip the 6 header bytes (microseconds, counter, UTC offset) on FST files and not on the
+  others
 
 **For 2024 Ring Buffer Format:**
 - Parse verbose diagnostic messages

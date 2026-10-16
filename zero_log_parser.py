@@ -1213,8 +1213,19 @@ class Gen2:
 
     @classmethod
     def debug_message(cls, x):
-        # Extract the debug message string
-        message = BinaryTools.unpack_str(x, 0x0, count=len(x) - 1)
+        """Type 0xFD - debug string, NUL-terminated ASCII text.
+
+        On FST/Gen3 files the text follows the 6-byte prefix every entry
+        carries (see fst_entry_prefix); classic and ring-buffer payloads
+        start with the text itself. The prefix's sub-second field tells the
+        two apart: any four printable characters read as a u32 are far
+        above FST_SUBSECOND_MAX_US, so a payload whose text is at least
+        four characters long never passes the check.
+        """
+        text_start = 0
+        if len(x) > 6 and cls.fst_entry_prefix(x)['subsecond_us'] <= cls.FST_SUBSECOND_MAX_US:
+            text_start = 6
+        message = BinaryTools.unpack_str(x, text_start, count=len(x) - text_start - 1)
 
         log_level = None
 

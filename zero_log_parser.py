@@ -1815,14 +1815,6 @@ class Gen2:
         if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
             return cls.unhandled_entry_format(0x48, x)
 
-        prefix = cls.fst_entry_prefix(x)
-        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
-            return cls.unhandled_entry_format(0x48, x)
-
-        prefix = cls.fst_entry_prefix(x)
-        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
-            return cls.unhandled_entry_format(0x48, x)
-
         chargers = []
         for index in range(record_bytes // cls.CHARGER_RECORD_LEN):
             start = cls.CHARGER_RECORD_OFFSET + index * cls.CHARGER_RECORD_LEN

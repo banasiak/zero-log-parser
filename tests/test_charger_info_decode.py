@@ -11,8 +11,10 @@ Filler bytes in the undecoded regions are 1..100, which avoids 0xB2 and
 wrapped in a raw entry for the parse_entry() test.
 
 Field offsets inside each 49-byte record: name 0-9, flags 10-11, measurement
-block 12-28 (undecoded), hertz 29, one unidentified byte 30, id 31, version
-32-33 (u16), serial number 34-37 (u32), trailer 38-48 (undecoded).
+block 12-28 (its DC and AC readings are covered by
+test_charger_measurements_decode.py), hertz 29, one unidentified byte 30, id
+31, version 32-33 (u16), serial number 34-37 (u32), trailer 38-48
+(undecoded).
 """
 
 import logging

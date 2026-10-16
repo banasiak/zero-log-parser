@@ -452,6 +452,68 @@ Offset | Length | Contents
 0x00   | 1      | Module type
 0x01   | 1      | Module state
 
+### `0x48` (FST) - charger table
+One 49-byte record per charger unit, so the payload is 49 or 98 bytes (55 or 104 in the parser,
+which counts from header byte `0x07`). Offsets are within a record.
+
+Offset | Length | Contents | Parser key
+------ | :----: | -------- | ----------
+0x00   | 10     | Name, ASCII, NUL padded | `name`
+0x0a   | 2      | Flags | `flags`
+0x0c   | 4      | DC output voltage, mV | `dc_voltage_volts`
+0x10   | 2      | DC output current, A | `dc_current_amps`
+0x12   | 2      | Unidentified; usually 1-2 A above the DC output current, but held at 56-58 while the output tapered in charges taken to 100% or 110%: possibly a current setpoint or limit | -
+0x14   | 4      | Unidentified; 125,000 in every record seen (a voltage limit in mV?) | -
+0x18   | 1      | Unidentified; 34 while charging, 0 when idle | -
+0x19   | 1      | Unidentified; 34 in every record seen | -
+0x1a   | 1      | AC input voltage, V | `ac_voltage_volts`
+0x1b   | 1      | AC input current, A | `ac_current_amps`
+0x1c   | 1      | Unidentified; 0 in every record seen | -
+0x1d   | 1      | Mains frequency, Hz | `hertz`
+0x1e   | 1      | Unidentified; 25 when idle, rising during a charge and levelling off at 86 in a long one | -
+0x1f   | 1      | Charger id | `id`
+0x20   | 2      | Version | `version`
+0x22   | 4      | Serial number | `serial_number`
+0x26   | 11     | Trailer, unidentified | -
+
+**Evidence for the DC and AC readings.** From one vehicle, a 2023 DSR/X, in three MBB logs: pulled
+on 2026-10-15 (firmware 46: four records while charging and one idle with the pack full), on
+2026-10-16 after an override charge to 100% and an extended charge to 110% (five more while
+charging, one idle), and on 2025-10-05 (firmware 42: 17 records across two charges).
+
+- AC input and DC output power balance at 91.5-98.5% on 24 of the 26 charging records, for example
+  239 V × 28 A = 6,692 W in and 110.22 V × 59 A = 6,503 W out (97.2%). The other two compute to just
+  over 100% at 7-9 A AC, where whole-amp resolution alone moves the figure by 5-7%.
+- The DC output voltage is 0.4-1.7 V above the pack voltage the MBB recorded in its state telemetry
+  in the same second, and the DC output current within -0.5 to +3.5 A of the pack's charge current.
+- The flags read `0x0120` when idle and `0x0180` early in a charge. In charges to the usual 90%
+  target they change to `0x0580` as the output current falls; in the two charges an override took to
+  100% they read `0x1180` near the end; in the extended charge to 110% they stay `0x0180`.
+
+### `0x49` (FST) - charge status *(observed, not decoded)*
+Thirteen records over five charges in the same logs. The parser keeps them in `raw_hex`.
+
+Offset | Length | Observed
+------ | :----: | --------
+0x00   | 4      | 117,600 in every record, including an extended charge to 110% that took the pack to 117.4 V and its highest cell to 4.196 V: 28 × 4.200 V in mV, the pack's maximum rather than a per-charge target
+0x04   | 2      | Falls as the pack fills (237 at 21%, 69 at 86%, 11 near 110%), within 1 A of the BMS's own charge current limit recorded at the same time (41 against 42, 11 against 12): probably that limit, in A
+0x06   | 1      | 90 in every record, including charges an override took to 100% and an extended charge to 110%, so it is not where a charge stops. The bike's charge target is set to 90%, which neither override changes; it may be that setting
+0x07   | 2      | Close to the AC input current in the `0x48` records around them, in A
+0x09   | 2      | Within -0.5 to +3.2 A of the pack's charge current in the same second: probably the DC output current, in A
+
+### `0x4e` (FST) - firmware update *(observed, not decoded)*
+One record, written 3.6 s after the debug string "CPU Branch to Bootloader, save stats: FWUP reset"
+and followed by "Board was reset. Source: Software". The parser keeps it in `raw_hex`.
+
+Offset | Length | Observed
+------ | :----: | --------
+0x00   | 2      | 44: the firmware revision before the update
+0x02   | 2      | 46: the firmware revision the header reports afterwards
+0x04   | 32     | "2025-12-17_181002", NUL padded: a build date and time
+0x24   | 2      | 4: unidentified
+0x26   | 6      | "bankb", NUL terminated: presumably the flash bank written
+0x2c   | 10     | "ed2c99976", NUL terminated: the firmware build the header reports
+
 ### `0x31` - MBB BMS Isolation Fault
 Offset | Length | Contents
 ------ | :----: | --------

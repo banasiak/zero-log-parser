@@ -1782,7 +1782,12 @@ class Gen2:
     # not a different structure). Each record, offsets relative to its start:
     #   0-9   name, 10 bytes, ASCII, NUL padded (5 values seen, see below)
     #  10-11  flags, 2 bytes (first byte is 0x80 or 0x20 in 95.7% of records)
-    #  12-28  17-byte measurement block, undecoded
+    #  12-15  DC output voltage, mV, u32 LE
+    #  16-17  DC output current, A, u16 LE
+    #  18-25  undecoded (see LOG_STRUCTURE.md for what was observed)
+    #  26     AC input voltage, V
+    #  27     AC input current, A
+    #  28     undecoded
     #  29     hertz (0, or 47-63 in all but 14 of 10,104 records)
     #  30     unidentified byte
     #  31     id (0x10, 0x11, 0x12)
@@ -1798,8 +1803,9 @@ class Gen2:
         """Type 0x48 - charger table (55 or 104 bytes: one or two 49-byte
         charger records after the shared 6-byte prefix).
 
-        The name, flags, hertz, id, version and serial number are decoded.
-        The 17-byte measurement block, the single unidentified byte and the
+        The name, flags, DC output voltage and current, AC input voltage
+        and current, hertz, id, version and serial number are decoded. The
+        rest of the measurement block, the single unidentified byte and the
         11-byte trailer are kept, undecoded, in each record's raw_hex.
 
         A payload whose length is not the prefix plus a whole number of
@@ -1828,6 +1834,10 @@ class Gen2:
             chargers.append({
                 'name': name_text.decode('ascii').strip(),
                 'flags': BinaryTools.unpack('uint16', record, 10),
+                'dc_voltage_volts': BinaryTools.unpack('uint32', record, 12) / 1000.0,
+                'dc_current_amps': BinaryTools.unpack('uint16', record, 16),
+                'ac_voltage_volts': BinaryTools.unpack('uint8', record, 26),
+                'ac_current_amps': BinaryTools.unpack('uint8', record, 27),
                 'hertz': BinaryTools.unpack('uint8', record, 29),
                 'id': BinaryTools.unpack('uint8', record, 31),
                 'version': BinaryTools.unpack('uint16', record, 32),
@@ -1841,7 +1851,9 @@ class Gen2:
 
         conditions = '; '.join(
             f"{c['name']} id {c['id']}, serial {c['serial_number']}, "
-            f"version {c['version']}, {c['hertz']} Hz"
+            f"version {c['version']}, {c['hertz']} Hz, "
+            f"{c['ac_voltage_volts']} V {c['ac_current_amps']} A in, "
+            f"{c['dc_voltage_volts']:.2f} V {c['dc_current_amps']} A out"
             for c in chargers
         )
 

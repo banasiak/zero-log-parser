@@ -15,8 +15,18 @@ ZERO_TIME_FORMAT = '%Y-%m-%d %H:%M:%S'  # ISO format is more universal
 MBB_TIMESTAMP_GMT_OFFSET = -7 * 60 * 60
 
 
+def offset_hours_from_string(tz_code: str) -> Optional[float]:
+    """The hours in a numeric timezone argument such as '-8', '+1' or '5.5',
+    as the command line passes it, or None if tz_code is a zone name."""
+    if re.fullmatch(r'[+-]?\d+(\.\d+)?', tz_code.strip()):
+        return float(tz_code)
+    return None
+
+
 def get_timezone_offset(tz_code: str | int | None) -> int:
     """Get the timezone offset in seconds from timezone argument"""
+    if isinstance(tz_code, str) and offset_hours_from_string(tz_code) is not None:
+        tz_code = offset_hours_from_string(tz_code)
     if isinstance(tz_code, int):
         timezone_offset = tz_code * 60 * 60
     elif isinstance(tz_code, str):
@@ -232,6 +242,9 @@ def apply_timezone_to_datetime(dt: datetime, tz_code: Union[str, int, None]) -> 
         # Use local system timezone
         return dt.replace(tzinfo=timezone.utc).astimezone()
     
+    if isinstance(tz_code, str) and offset_hours_from_string(tz_code) is not None:
+        tz_code = offset_hours_from_string(tz_code)
+
     if isinstance(tz_code, (int, float)):
         # Hour offset
         offset = timedelta(hours=tz_code)
